@@ -6,49 +6,275 @@ Módulo de control UART de alta velocidad para comunicación Jetson-ESP32 en sis
 
 Este módulo implementa un protocolo binario para comunicación de control en tiempo real entre un Jetson (cerebro) y ESP32 (ejecutor). El Jetson maneja la percepción y la toma de decisiones, mientras que el ESP32 ejecuta el control de motores, dirección y otras operaciones de hardware usando FreeRTOS.
 
-## Especificación del Protocolo
+# Protocolo de Comunicación ESP32 - Guía para el Equipo Brain
 
-### Formato de Mensaje
+Este documento describe cómo enviar comandos desde el sistema Brain (Jetson/PC) hacia el ESP32 que controla los motores, dirección y luces del vehículo.
 
-Cada mensaje tiene un total de **16 bytes**:
+## Formato de Comandos
+
+Todos los comandos deben seguir el formato:
 
 ```
-Byte 0:     Byte de inicio (0xAA)
-Byte 1:     Topic (1-4)
-Byte 2:     ID de comando
-Bytes 3-6:  Valor (int32_t, little-endian)
-Bytes 7-8:  Secuencia (uint16_t, little-endian)
-Bytes 9-10: TTL (uint16_t, milisegundos, little-endian)
-Bytes 11-12: (reservado/no usado)
-Bytes 13-14: CRC16 (little-endian)
+CHANNEL:COMMAND:VALUE\n
 ```
 
-### Topics
+- **CHANNEL**: Un solo carácter que identifica el canal
+- **COMMAND**: Nombre del comando (mayúsculas)
+- **VALUE**: Valor numérico entero
+- **Terminación**: Cada comando debe terminar con `\n` (newline)
 
-- `T_DRIVE = 1`: Comandos de motor/conducción
-- `T_STEER = 2`: Comandos de dirección
-- `T_LIGHTS = 3`: Control de luces
-- `T_SYS = 4`: Gestión del sistema
+## Canales Disponibles
 
-### Comandos
+### `C` - CONTROL
+Comandos de control del vehículo (velocidad, dirección)
 
-#### Comandos de Conducción (Topic 1)
-- `DRIVE_SET_SPEED = 1`: Establecer punto de consigna de velocidad
-- `DRIVE_EBRAKE = 2`: Freno de emergencia
-- `DRIVE_STOP = 3`: Comando de parada
+### `E` - EMERGENCY  
+Comandos de emergencia (frenado inmediato)
 
-#### Comandos de Dirección (Topic 2)
-- `STEER_SET_ANGLE = 10`: Establecer ángulo de dirección
+### `M` - MANAGEMENT
+Comandos de gestión del sistema (armado, modo, etc.)
 
-#### Comandos de Luces (Topic 3)
-- `LIGHTS_ON = 30`: Encender luces
-- `LIGHTS_OFF = 31`: Apagar luces
+## Comandos por Canal
 
-#### Comandos del Sistema (Topic 4)
-- `SYS_HEARTBEAT = 20`: Mensaje de latido
-- `SYS_MODE = 21`: Establecer modo (0=AUTO, 1=MANUAL)
-- `SYS_ARM = 22`: Armar el sistema
-- `SYS_DISARM = 23`: Desarmar el sistema
+### Canal CONTROL (`C`)
+
+#### `C:SET_SPEED:<valor>`
+Establece la velocidad del motor de tracción.
+
+- **Valor**: 0-255 (0 = detenido, 255 = máxima velocidad)
+- **TTL**: 200ms (el comando expira si no se renueva)
+- **Ejemplo**: `C:SET_SPEED:120`
+
+```python
+# Ejemplo Python
+ser.write(b"C:SET_SPEED:120\n")
+```
+
+#### `C:SET_STEER:<valor>`
+Establece el ángulo de dirección del servo.
+
+- **Valor**: 50-135 (50 = izquierda máxima, 105 = centro, 135 = derecha máxima)
+- **TTL**: 200ms
+- **Ejemplo**: `C:SET_STEER:105` (centro)
+
+**⚠️ IMPORTANTE - Conversión de Grados a Valores de Servo:**
+
+Si tu lane detector envía grados (ej: -45° a +45°), debes convertir así:
+
+```python
+# Servo range: 50 (izquierda) a 135 (derecha), centro = 105
+# Range total: 85 unidades
+SERVO_LEFT = 50
+SERVO_CENTER = 105
+SERVO_RIGHT = 135
+SERVO_RANGE = 85  # 135 - 50
+
+def degrees_to_servo(degrees, max_degrees=45):
+    """
+    Convierte grados de lane detector a valor de servo.
+    
+    Args:
+        degrees: Ángulo en grados (-max_degrees a +max_degrees)
+        max_degrees: Máximo ángulo permitido (default: 45°)
+    
+    Returns:
+        Valor de servo (50-135)
+    """
+    # Normalizar a -1.0 a +1.0
+    normalized = degrees / max_degrees
+    # Limitar al rango [-1, 1]
+    normalized = max(-1.0, min(1.0, normalized))
+    # Convertir a valor de servo
+    servo_value = SERVO_CENTER + (normalized * (SERVO_RANGE / 2))
+    return int(round(servo_value))
+
+# Ejemplos:
+# degrees_to_servo(0)    -> 105 (centro)
+# degrees_to_servo(-45) -> 50  (izquierda máxima)
+# degrees_to_servo(45)  -> 135 (derecha máxima)
+# degrees_to_servo(-20) -> ~82 (izquierda suave)
+```
+
+**Ejemplo completo con lane detector:**
+
+```python
+# En lugar de solo imprimir "turn left" o "turn right":
+lane_angle = -25  # grados desde tu detector
+
+# Convertir y enviar:
+servo_value = degrees_to_servo(lane_angle)
+command = f"C:SET_STEER:{servo_value}\n"
+ser.write(command.encode())
+```
+
+### Canal EMERGENCY (`E`)
+
+#### `E:BRAKE_NOW:0`
+Freno de emergencia inmediato. Detiene el motor instantáneamente (<1ms de respuesta).
+
+- **Valor**: Siempre 0 (ignorado)
+- **Ejemplo**: `E:BRAKE_NOW:0`
+
+```python
+ser.write(b"E:BRAKE_NOW:0\n")
+```
+
+#### `E:STOP:0`
+Alias para freno de emergencia (mismo comportamiento que BRAKE_NOW).
+
+### Canal MANAGEMENT (`M`)
+
+#### `M:SYS_ARM:0`
+Arma el sistema (prepara para operación).
+
+- **Valor**: Siempre 0
+- **TTL**: 5000ms
+- **Ejemplo**: `M:SYS_ARM:0`
+
+#### `M:SYS_DISARM:0`
+Desarma el sistema (modo seguro).
+
+- **Valor**: Siempre 0
+- **TTL**: 5000ms
+- **Ejemplo**: `M:SYS_DISARM:0`
+
+#### `M:SYS_MODE:<valor>`
+Establece el modo del sistema.
+
+- **Valor**: 0 = MANUAL, 1 = AUTO
+- **TTL**: 5000ms
+- **Ejemplo**: `M:SYS_MODE:1` (modo AUTO)
+
+## Ejemplos de Uso
+
+### Ejemplo 1: Control Básico
+
+```python
+import serial
+
+ser = serial.Serial('/dev/ttyUSB0', baudrate=115200, timeout=1)
+
+# Armar sistema
+ser.write(b"M:SYS_ARM:0\n")
+
+# Establecer velocidad
+ser.write(b"C:SET_SPEED:150\n")
+
+# Centrar dirección
+ser.write(b"C:SET_STEER:105\n")
+
+# Frenar de emergencia
+ser.write(b"E:BRAKE_NOW:0\n")
+```
+
+### Ejemplo 2: Lane Following
+
+```python
+import serial
+import time
+
+ser = serial.Serial('/dev/ttyUSB0', baudrate=115200, timeout=1)
+
+def degrees_to_servo(degrees, max_degrees=45):
+    SERVO_CENTER = 105
+    SERVO_RANGE = 85
+    normalized = max(-1.0, min(1.0, degrees / max_degrees))
+    return int(round(SERVO_CENTER + (normalized * (SERVO_RANGE / 2))))
+
+# Loop de control
+while True:
+    # Obtener ángulo del lane detector
+    lane_angle = get_lane_angle()  # Tu función
+    
+    # Convertir y enviar comando de dirección
+    servo_value = degrees_to_servo(lane_angle)
+    command = f"C:SET_STEER:{servo_value}\n"
+    ser.write(command.encode())
+    
+    # Mantener velocidad constante
+    ser.write(b"C:SET_SPEED:120\n")
+    
+    time.sleep(0.05)  # 20 Hz update rate
+```
+
+### Ejemplo 3: Control con Velocidad Variable
+
+```python
+def control_vehicle(speed, steering_degrees):
+    """
+    Función helper para controlar el vehículo.
+    
+    Args:
+        speed: Velocidad 0-255
+        steering_degrees: Ángulo de dirección en grados (-45 a +45)
+    """
+    # Validar velocidad
+    speed = max(0, min(255, int(speed)))
+    
+    # Convertir dirección
+    servo_value = degrees_to_servo(steering_degrees)
+    
+    # Enviar comandos
+    ser.write(f"C:SET_SPEED:{speed}\n".encode())
+    ser.write(f"C:SET_STEER:{servo_value}\n".encode())
+```
+
+## Consideraciones Importantes
+
+### Time-to-Live (TTL)
+Los comandos tienen un tiempo de vida limitado:
+- **CONTROL**: 200ms - Debes enviar comandos periódicamente (mínimo 5 Hz)
+- **MANAGEMENT**: 5000ms - Comandos de sistema duran más
+
+**Recomendación**: Envía comandos de velocidad y dirección a **10-20 Hz** para mantener el control.
+
+### Last-Writer-Wins
+El sistema usa patrón "last-writer-wins". Si envías múltiples comandos rápidamente, solo el último es válido. No hay cola de comandos.
+
+### Respuestas del ESP32
+El ESP32 puede enviar mensajes de debug por serial. Puedes leerlos para debugging:
+
+```python
+if ser.in_waiting > 0:
+    response = ser.readline().decode('utf-8', errors='ignore')
+    print(f"ESP32: {response}")
+```
+
+### Manejo de Errores
+- Si el comando no se parsea correctamente, el ESP32 imprime: `[LinkRxTask] Failed to parse message: ...`
+- Verifica que el formato sea exacto: `CHANNEL:COMMAND:VALUE\n`
+- Asegúrate de que el baud rate coincida (115200 para USB, 921600 para UART externo)
+
+## Checklist de Integración
+
+- [ ] Configurar conexión serial (USB o UART externo)
+- [ ] Implementar función de conversión grados → servo
+- [ ] Enviar comandos periódicamente (10-20 Hz)
+- [ ] Manejar freno de emergencia en caso de detección de obstáculos
+- [ ] Implementar heartbeat/supervisión si es necesario
+- [ ] Probar con el simulador UART antes de integrar con lane detector
+
+## Simulador de Pruebas
+
+Puedes probar tus comandos con el simulador incluido:
+
+```bash
+cd embedded
+pip install -r test/python/requirements.txt
+python3 test/python/test_uart_simulator.py /dev/ttyUSB0 --baud 115200
+```
+
+Luego prueba comandos como:
+- `C:SET_SPEED:120`
+- `C:SET_STEER:105`
+- `E:BRAKE_NOW:0`
+
+## Soporte
+
+Si tienes dudas sobre el protocolo o encuentras problemas, consulta:
+- `embedded/src/link_rx_task.cpp` - Implementación del parser
+- `embedded/include/messages.h` - Definiciones de canales y comandos
+- `embedded/include/hardware.h` - Valores de servo (SERVO_CENTER, etc.)
 
 ## Instalación
 
@@ -90,7 +316,26 @@ node.stop_all()
 
 ### Pruebas con CLI Interactivo
 
-Usa la CLI interactiva para pruebas manuales:
+Hay dos opciones para pruebas interactivas:
+
+#### Opción 1: Tester con Menú (Recomendado)
+
+Interfaz fácil de usar con menús para probar todos los comandos:
+
+```bash
+python test_interactive.py --port /dev/ttyUSB0 --baudrate 921600
+```
+
+**Características:**
+- Menú principal con opciones numeradas
+- Submenús para cada tipo de comando (Drive, Steering, Lights, System)
+- Entrada de valores numéricos para comandos
+- Visualización de estadísticas en tiempo real
+- Estado actual del sistema visible en todo momento
+
+#### Opción 2: CLI con Teclado (Para control rápido)
+
+CLI con controles de teclado para pruebas rápidas:
 
 ```bash
 python test_cli.py --port /dev/ttyUSB0 --baudrate 921600
@@ -143,8 +388,8 @@ El nodo de control usa múltiples hilos de trabajo:
 
 1. **Send Thread**: Procesa la cola de mensajes y envía por UART
 2. **Receive Thread**: Recibe y valida mensajes entrantes
-3. **Control Thread**: Envía actualizaciones de control a 100 Hz
-4. **Heartbeat Thread**: Envía latido a 10 Hz
+3. **Control Thread**: Envía actualizaciones de control
+4. **Heartbeat Thread**
 
 ### Cola de Mensajes
 
@@ -187,7 +432,9 @@ El protocolo usa CRC16-XMODEM (polinomio 0x1021) calculado sobre el payload de 1
 brain/
 ├── protocol.py          # Definiciones de protocolo, packing/unpacking, CRC16
 ├── jetson_control.py    # Implementación principal del nodo de control
-├── test_cli.py          # CLI interactivo para pruebas
+├── test_cli.py          # CLI interactivo con controles de teclado
+├── test_interactive.py  # Tester interactivo con menús (recomendado)
+├── test_protocol.py     # Tests unitarios del protocolo
 ├── requirements.txt     # Dependencias de Python
 └── README.md           # Este archivo
 ```
