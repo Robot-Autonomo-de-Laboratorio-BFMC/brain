@@ -227,6 +227,10 @@ class WebStreamer:
         self.running = False
         # Flask doesn't have a clean shutdown, but the thread will exit when app stops
     
+    def is_running(self) -> bool:
+        """Check if the web server is running."""
+        return self.running
+    
     def _get_local_ip(self) -> str:
         """Get local IP address."""
         import socket

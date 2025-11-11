@@ -506,6 +506,10 @@ def run_lane_detection(
     # Delay para mostrar frames (aproximadamente 30 FPS)
     frame_delay = 33
     
+    # Si web_streamer está habilitado, deshabilitar display automáticamente
+    if web_streamer:
+        show_display = False
+    
     print(f"Cámara abierta (ruta: {camera_path})")
     print(f"Resolución de la cámara: {actual_width}x{actual_height}")
     print(f"Resolución de procesamiento: {target_width}x{target_height}")
@@ -514,14 +518,19 @@ def run_lane_detection(
         print("Steering callback: ENABLED")
     else:
         print("Steering callback: DISABLED")
-    print("Presiona 'q' para salir")
+    if web_streamer:
+        print("Web streaming: ENABLED (display windows disabled)")
+    elif show_display:
+        print("Display windows: ENABLED (Presiona 'q' para salir)")
+    else:
+        print("Display windows: DISABLED")
     
     # Inicializar detector
     queue_list = MockQueueList()
     detector = MarcosLaneDetector(queue_list)
     
-    # Crear ventanas si se requiere visualización
-    if show_display:
+    # Crear ventanas si se requiere visualización (y no hay web streaming)
+    if show_display and not web_streamer:
         cv2.namedWindow('Detección de Carriles - Marcos', cv2.WINDOW_NORMAL)
         cv2.namedWindow('Canny - Detección de Bordes', cv2.WINDOW_NORMAL)
     
@@ -581,7 +590,8 @@ def run_lane_detection(
                 canny_display = cv2.cvtColor(canny_image, cv2.COLOR_GRAY2BGR)
                 web_streamer.update_frame(display_frame, canny_display)
             
-            if show_display:
+            # Mostrar ventanas solo si display está habilitado Y no hay web streaming
+            if show_display and not web_streamer:
                 # Convertir canny a BGR para mostrar
                 canny_display = cv2.cvtColor(canny_image, cv2.COLOR_GRAY2BGR)
                 
@@ -594,17 +604,22 @@ def run_lane_detection(
             continue
         
         # Control de salida
-        if show_display:
+        if show_display and not web_streamer:
             key = cv2.waitKey(frame_delay) & 0xFF
             if key == ord('q'):
                 break
         else:
-            # Si no hay display, usar pequeño delay para no saturar CPU
+            # Si no hay display o hay web streaming, usar pequeño delay para no saturar CPU
+            # El web streaming maneja su propio ciclo de eventos
             time.sleep(frame_delay / 1000.0)
+            
+            # Verificar si el web streamer ha sido detenido
+            if web_streamer and not web_streamer.is_running():
+                break
     
     # Cleanup
     cap.release()
-    if show_display:
+    if show_display and not web_streamer:
         cv2.destroyAllWindows()
     if web_streamer:
         web_streamer.stop()
