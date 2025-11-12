@@ -27,16 +27,16 @@ class MockQueueList(dict):
         self['Warning'] = MockQueue()
 
 # LANES
-PID_TOLERANCE = 50
-PID_KP = 0.05
+PID_TOLERANCE = 60
+PID_KP = 0.02
 PROP_CONSTANT = 1.2
 
-THRESHOLD = 165
+THRESHOLD = 170
 KERNEL = 3
-ROI = 35
+ROI = 25
 
-PID_KI = 0.02
-PID_KD = 0.1
+PID_KI = 0.001
+PID_KD = 0.001
 
 # THRESHOLD = 100
 # KERNEL = 9
