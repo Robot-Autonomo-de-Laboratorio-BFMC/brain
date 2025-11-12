@@ -1,5 +1,6 @@
 import time
 import sys
+import threading
 from typing import Optional, Callable
 
 import cv2
@@ -107,6 +108,45 @@ class MarcosLaneDetector:
         self.should_decrease_votes = False
         self.first_time_in_votes_logic = True
         self.new_votes_logic_start_time = 0
+        self._pid_lock = threading.Lock()
+    
+    def update_pid_parameters(self, kp=None, ki=None, kd=None, tolerance=None):
+        """
+        Update PID parameters in real-time.
+        
+        Args:
+            kp: New Kp value (optional)
+            ki: New Ki value (optional)
+            kd: New Kd value (optional)
+            tolerance: New tolerance value (optional)
+        """
+        with self._pid_lock:
+            if kp is not None:
+                self.kp = kp
+            if ki is not None:
+                self.ki = ki
+            if kd is not None:
+                self.kd = kd
+            if tolerance is not None:
+                self.tolerancia = tolerance
+            
+            # Recreate PID controller with new parameters
+            self.pid_controller = PIDController(self.kp, self.ki, self.kd, self.tolerancia)
+    
+    def get_pid_parameters(self):
+        """
+        Get current PID parameters.
+        
+        Returns:
+            dict with kp, ki, kd, tolerance
+        """
+        with self._pid_lock:
+            return {
+                'kp': self.kp,
+                'ki': self.ki,
+                'kd': self.kd,
+                'tolerance': self.tolerancia
+            }
 
     def follow_left_line(self, line):
         x1, y1, x2, y2 = line[0]
@@ -500,6 +540,10 @@ def run_lane_detection(
     # Inicializar detector
     queue_list = MockQueueList()
     detector = MarcosLaneDetector(queue_list)
+    
+    # Pasar referencia del detector al web_streamer si está disponible
+    if web_streamer:
+        web_streamer.detector = detector
     
     # Crear ventanas si se requiere visualización (y no hay web streaming)
     if show_display and not web_streamer:

@@ -11,8 +11,9 @@ import time
 import cv2
 import numpy as np
 from typing import Optional, Callable
-from flask import Flask, Response, render_template_string
+from flask import Flask, Response, render_template_string, request, jsonify
 import io
+import json
 
 
 class WebStreamer:
@@ -23,13 +24,14 @@ class WebStreamer:
     following the Single Responsibility Principle.
     """
     
-    def __init__(self, port: int = 5000, host: str = '0.0.0.0'):
+    def __init__(self, port: int = 5000, host: str = '0.0.0.0', detector=None):
         """
         Initialize the web streamer.
         
         Args:
             port: Port number for the web server (default: 5000)
             host: Host address to bind to (default: '0.0.0.0' for all interfaces)
+            detector: Optional reference to MarcosLaneDetector for PID control
         """
         self.port = port
         self.host = host
@@ -39,6 +41,7 @@ class WebStreamer:
         self.frame_lock = threading.Lock()
         self.running = False
         self.server_thread: Optional[threading.Thread] = None
+        self.detector = detector  # Reference to lane detector for PID control
         
         # Setup routes
         self._setup_routes()
@@ -104,6 +107,70 @@ class WebStreamer:
                     border-radius: 4px;
                     margin: 5px;
                 }
+                .controls {
+                    background-color: #2a2a2a;
+                    padding: 20px;
+                    border-radius: 8px;
+                    margin-top: 20px;
+                }
+                .control-group {
+                    margin-bottom: 20px;
+                }
+                .control-group label {
+                    display: block;
+                    margin-bottom: 8px;
+                    color: #4CAF50;
+                    font-weight: bold;
+                }
+                .slider-container {
+                    display: flex;
+                    align-items: center;
+                    gap: 15px;
+                }
+                .slider {
+                    flex: 1;
+                    height: 8px;
+                    border-radius: 5px;
+                    background: #444;
+                    outline: none;
+                    -webkit-appearance: none;
+                }
+                .slider::-webkit-slider-thumb {
+                    -webkit-appearance: none;
+                    appearance: none;
+                    width: 20px;
+                    height: 20px;
+                    border-radius: 50%;
+                    background: #4CAF50;
+                    cursor: pointer;
+                }
+                .slider::-moz-range-thumb {
+                    width: 20px;
+                    height: 20px;
+                    border-radius: 50%;
+                    background: #4CAF50;
+                    cursor: pointer;
+                    border: none;
+                }
+                .value-display {
+                    min-width: 80px;
+                    text-align: right;
+                    color: #fff;
+                    font-family: monospace;
+                }
+                button {
+                    background-color: #4CAF50;
+                    color: white;
+                    border: none;
+                    padding: 10px 20px;
+                    border-radius: 4px;
+                    cursor: pointer;
+                    font-size: 14px;
+                    margin-top: 10px;
+                }
+                button:hover {
+                    background-color: #45a049;
+                }
             </style>
         </head>
         <body>
@@ -119,12 +186,113 @@ class WebStreamer:
                         <img src="{{ url_for('canny_feed') }}" alt="Canny Detection">
                     </div>
                 </div>
+                <div class="controls" id="pidControls">
+                    <h2 style="color: #4CAF50; margin-top: 0;">PID Parameters (Real-time)</h2>
+                    <div class="control-group">
+                        <label for="kp">Kp (Proportional): <span class="value-display" id="kpValue">0.02</span></label>
+                        <div class="slider-container">
+                            <input type="range" id="kp" class="slider" min="0" max="0.1" step="0.001" value="0.02">
+                        </div>
+                    </div>
+                    <div class="control-group">
+                        <label for="ki">Ki (Integral): <span class="value-display" id="kiValue">0.001</span></label>
+                        <div class="slider-container">
+                            <input type="range" id="ki" class="slider" min="0" max="0.01" step="0.0001" value="0.001">
+                        </div>
+                    </div>
+                    <div class="control-group">
+                        <label for="kd">Kd (Derivative): <span class="value-display" id="kdValue">0.001</span></label>
+                        <div class="slider-container">
+                            <input type="range" id="kd" class="slider" min="0" max="0.01" step="0.0001" value="0.001">
+                        </div>
+                    </div>
+                    <div class="control-group">
+                        <label for="tolerance">Tolerance: <span class="value-display" id="toleranceValue">60</span></label>
+                        <div class="slider-container">
+                            <input type="range" id="tolerance" class="slider" min="0" max="200" step="1" value="60">
+                        </div>
+                    </div>
+                    <button onclick="resetPID()">Reset to Default</button>
+                </div>
                 <div class="info">
                     <div class="status">Streaming Active</div>
                     <p>Access this page from any device on your network</p>
-                    <p>To access from internet, configure port forwarding on your router</p>
+                    <p>Adjust PID parameters in real-time using the sliders above</p>
                 </div>
             </div>
+            <script>
+                // Update PID parameters when sliders change
+                document.getElementById('kp').addEventListener('input', function(e) {
+                    document.getElementById('kpValue').textContent = parseFloat(e.target.value).toFixed(3);
+                    updatePID();
+                });
+                document.getElementById('ki').addEventListener('input', function(e) {
+                    document.getElementById('kiValue').textContent = parseFloat(e.target.value).toFixed(4);
+                    updatePID();
+                });
+                document.getElementById('kd').addEventListener('input', function(e) {
+                    document.getElementById('kdValue').textContent = parseFloat(e.target.value).toFixed(4);
+                    updatePID();
+                });
+                document.getElementById('tolerance').addEventListener('input', function(e) {
+                    document.getElementById('toleranceValue').textContent = e.target.value;
+                    updatePID();
+                });
+                
+                let updateTimeout;
+                function updatePID() {
+                    clearTimeout(updateTimeout);
+                    updateTimeout = setTimeout(() => {
+                        const params = {
+                            kp: parseFloat(document.getElementById('kp').value),
+                            ki: parseFloat(document.getElementById('ki').value),
+                            kd: parseFloat(document.getElementById('kd').value),
+                            tolerance: parseInt(document.getElementById('tolerance').value)
+                        };
+                        
+                        fetch('/api/pid', {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify(params)
+                        }).then(response => response.json())
+                          .then(data => {
+                              if (data.status === 'ok') {
+                                  console.log('PID updated:', params);
+                              }
+                          })
+                          .catch(error => console.error('Error:', error));
+                    }, 100); // Debounce: wait 100ms after last change
+                }
+                
+                function resetPID() {
+                    document.getElementById('kp').value = 0.02;
+                    document.getElementById('ki').value = 0.001;
+                    document.getElementById('kd').value = 0.001;
+                    document.getElementById('tolerance').value = 60;
+                    document.getElementById('kpValue').textContent = '0.02';
+                    document.getElementById('kiValue').textContent = '0.001';
+                    document.getElementById('kdValue').textContent = '0.001';
+                    document.getElementById('toleranceValue').textContent = '60';
+                    updatePID();
+                }
+                
+                // Load current PID values on page load
+                fetch('/api/pid')
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.status === 'ok') {
+                            document.getElementById('kp').value = data.kp;
+                            document.getElementById('ki').value = data.ki;
+                            document.getElementById('kd').value = data.kd;
+                            document.getElementById('tolerance').value = data.tolerance;
+                            document.getElementById('kpValue').textContent = parseFloat(data.kp).toFixed(3);
+                            document.getElementById('kiValue').textContent = parseFloat(data.ki).toFixed(4);
+                            document.getElementById('kdValue').textContent = parseFloat(data.kd).toFixed(4);
+                            document.getElementById('toleranceValue').textContent = data.tolerance;
+                        }
+                    })
+                    .catch(error => console.error('Error loading PID:', error));
+            </script>
         </body>
         </html>
         """
@@ -154,6 +322,38 @@ class WebStreamer:
         def health():
             """Health check endpoint."""
             return {'status': 'ok', 'streaming': self.running}
+        
+        @self.app.route('/api/pid', methods=['GET'])
+        def get_pid():
+            """Get current PID parameters."""
+            if self.detector:
+                params = self.detector.get_pid_parameters()
+                return jsonify({'status': 'ok', **params})
+            return jsonify({'status': 'error', 'message': 'Detector not available'}), 500
+        
+        @self.app.route('/api/pid', methods=['POST'])
+        def set_pid():
+            """Set PID parameters."""
+            if not self.detector:
+                return jsonify({'status': 'error', 'message': 'Detector not available'}), 500
+            
+            try:
+                data = request.get_json()
+                kp = data.get('kp')
+                ki = data.get('ki')
+                kd = data.get('kd')
+                tolerance = data.get('tolerance')
+                
+                self.detector.update_pid_parameters(
+                    kp=kp,
+                    ki=ki,
+                    kd=kd,
+                    tolerance=tolerance
+                )
+                
+                return jsonify({'status': 'ok', 'message': 'PID parameters updated'})
+            except Exception as e:
+                return jsonify({'status': 'error', 'message': str(e)}), 400
     
     def _generate_frames(self, stream_type: str):
         """
