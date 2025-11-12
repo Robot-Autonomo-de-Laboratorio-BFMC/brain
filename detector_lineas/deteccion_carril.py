@@ -485,7 +485,8 @@ def run_lane_detection(
     show_display: bool = True,
     target_width: int = 640,
     target_height: int = 480,
-    web_streamer=None
+    web_streamer=None,
+    signal_detector=None
 ):
     """
     Ejecuta la detección de carriles con callback para eventos de dirección.
@@ -497,6 +498,7 @@ def run_lane_detection(
         target_width: Ancho objetivo para procesamiento
         target_height: Alto objetivo para procesamiento
         web_streamer: Optional WebStreamer instance for web streaming
+        signal_detector: Optional SignalDetector instance for traffic signal detection
     
     Returns:
         None (ejecuta hasta que se presiona 'q')
@@ -579,6 +581,20 @@ def run_lane_detection(
             
             # Preparar frame con información para visualización
             display_frame = frame.copy()
+            
+            # Detectar señales si el detector está disponible
+            signal_detections = []
+            if signal_detector and signal_detector.is_available():
+                signal_detections = signal_detector.detect(display_frame)
+                if signal_detections:
+                    display_frame = signal_detector.draw_detections(display_frame, signal_detections)
+                    # Mostrar información de la señal más confiable
+                    most_confident = signal_detector.get_most_confident(signal_detections)
+                    if most_confident:
+                        signal_text = f"Signal: {most_confident['class']} ({most_confident['confidence']:.2f})"
+                        cv2.putText(display_frame, signal_text, (10, 130), 
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+            
             resolution_text = f"Resolucion: {target_width}x{target_height}"
             cv2.putText(display_frame, resolution_text, (10, 30), 
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
@@ -652,6 +668,9 @@ if __name__ == "__main__":
     parser.add_argument("--no-display", action="store_true", help="Disable display windows")
     parser.add_argument("--web-stream", action="store_true", help="Enable web streaming (accessible via browser)")
     parser.add_argument("--web-port", type=int, default=5000, help="Port for web streaming (default: 5000)")
+    parser.add_argument("--signal-detection", action="store_true", help="Enable traffic signal detection (YOLO)")
+    parser.add_argument("--signal-model", type=str, default="../detector_señales/weights/best.pt", help="Path to YOLO model file (default: ../detector_señales/weights/best.pt)")
+    parser.add_argument("--signal-conf", type=float, default=0.5, help="Confidence threshold for signal detection (default: 0.5)")
     args = parser.parse_args()
     
     # Seleccionar cámara
@@ -672,11 +691,34 @@ if __name__ == "__main__":
             print("Web streaming disabled.")
             args.web_stream = False
     
+    # Inicializar detector de señales si está habilitado
+    signal_detector = None
+    if args.signal_detection:
+        try:
+            from signal_detector import SignalDetector
+            import os
+            model_path = os.path.abspath(args.signal_model)
+            if not os.path.exists(model_path):
+                print(f"Warning: Signal model not found at {model_path}")
+                print("Signal detection disabled.")
+            else:
+                signal_detector = SignalDetector(model_path, conf_threshold=args.signal_conf)
+                if signal_detector.is_available():
+                    print(f"Signal detection: ENABLED (model: {model_path})")
+                else:
+                    print("Signal detection: DISABLED (model failed to load)")
+                    signal_detector = None
+        except ImportError as e:
+            print(f"Error: Signal detector dependencies not installed: {e}")
+            print("Install with: pip install ultralytics")
+            print("Signal detection disabled.")
+    
     # Ejecutar detección sin callback (solo visualización)
     run_lane_detection(
         camera_path=camera_path,
         steering_callback=None,
         show_display=not args.no_display,
-        web_streamer=web_streamer
+        web_streamer=web_streamer,
+        signal_detector=signal_detector
     )
     

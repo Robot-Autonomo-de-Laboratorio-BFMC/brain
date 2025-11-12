@@ -80,6 +80,9 @@ Examples:
     parser.add_argument("--no-display", action="store_true", help="Disable display windows")
     parser.add_argument("--web-stream", action="store_true", help="Enable web streaming (accessible via browser)")
     parser.add_argument("--web-port", type=int, default=5000, help="Port for web streaming (default: 5000)")
+    parser.add_argument("--signal-detection", action="store_true", help="Enable traffic signal detection (YOLO)")
+    parser.add_argument("--signal-model", type=str, default="../detector_señales/weights/best.pt", help="Path to YOLO model file (default: ../detector_señales/weights/best.pt)")
+    parser.add_argument("--signal-conf", type=float, default=0.5, help="Confidence threshold for signal detection (default: 0.5)")
     
     args = parser.parse_args()
     
@@ -144,6 +147,28 @@ Examples:
                 print("Web streaming disabled.")
                 args.web_stream = False
         
+        # Inicializar detector de señales si está habilitado
+        signal_detector = None
+        if args.signal_detection:
+            try:
+                from signal_detector import SignalDetector
+                import os
+                model_path = os.path.abspath(args.signal_model)
+                if not os.path.exists(model_path):
+                    print(f"Warning: Signal model not found at {model_path}")
+                    print("Signal detection disabled.")
+                else:
+                    signal_detector = SignalDetector(model_path, conf_threshold=args.signal_conf)
+                    if signal_detector.is_available():
+                        print(f"Signal detection: ENABLED (model: {model_path})")
+                    else:
+                        print("Signal detection: DISABLED (model failed to load)")
+                        signal_detector = None
+            except ImportError as e:
+                print(f"Error: Signal detector dependencies not installed: {e}")
+                print("Install with: pip install ultralytics")
+                print("Signal detection disabled.")
+        
         # Setup signal handler for graceful shutdown
         def signal_handler(sig, frame):
             print("\n\nShutting down...")
@@ -168,7 +193,8 @@ Examples:
             camera_path=camera_path,
             steering_callback=controller.on_steering_detected,
             show_display=not args.no_display,
-            web_streamer=web_streamer
+            web_streamer=web_streamer,
+            signal_detector=signal_detector
         )
         
     except KeyboardInterrupt:
