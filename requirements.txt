@@ -3,7 +3,15 @@ opencv-python>=4.5.0
 numpy>=1.19.0
 flask>=2.0.0
 ultralytics>=8.0.0
-pycuda>=2021.1
-# Note: nvidia-tensorrt is typically pre-installed on Jetson or installed via JetPack
+
+# Optional dependencies for TensorRT (Jetson)
+# pycuda is typically pre-installed on Jetson via JetPack
+# If you need to install it manually on Jetson:
+#   sudo apt-get update
+#   sudo apt-get install python3-pycuda
+# Or for other systems:
+#   pip install pycuda
+# 
+# nvidia-tensorrt is typically pre-installed on Jetson via JetPack
 # If needed: sudo apt-get install python3-libnvinfer python3-libnvinfer-dev
 

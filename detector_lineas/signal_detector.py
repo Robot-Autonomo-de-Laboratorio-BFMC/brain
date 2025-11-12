@@ -51,9 +51,20 @@ class SignalDetector:
         """Load TensorRT engine model."""
         try:
             import tensorrt as trt
+        except ImportError:
+            print("⚠ TensorRT not available. Install via JetPack on Jetson.")
+            return False
+        
+        try:
             import pycuda.driver as cuda
             import pycuda.autoinit
-            
+        except ImportError:
+            print("⚠ PyCUDA not available.")
+            print("   On Jetson: sudo apt-get install python3-pycuda")
+            print("   On other systems: pip install pycuda")
+            return False
+        
+        try:
             # Load TensorRT engine
             TRT_LOGGER = trt.Logger(trt.Logger.WARNING)
             
@@ -114,10 +125,13 @@ class SignalDetector:
             
         except ImportError as e:
             print(f"⚠ TensorRT dependencies not available: {e}")
-            print("   Install: pip install nvidia-tensorrt pycuda")
+            print("   On Jetson: TensorRT should be pre-installed via JetPack")
+            print("   PyCUDA: sudo apt-get install python3-pycuda")
+            print("   Falling back to YOLO model if available...")
             return False
         except Exception as e:
             print(f"⚠ Error loading TensorRT model: {e}")
+            print("   Falling back to YOLO model if available...")
             return False
     
     def _load_yolo_model(self, model_path: str):
@@ -347,7 +361,11 @@ class SignalDetector:
             with self._lock:
                 if self.model_type == 'tensorrt':
                     # TensorRT inference
-                    import pycuda.driver as cuda
+                    try:
+                        import pycuda.driver as cuda
+                    except ImportError:
+                        print("Error: PyCUDA not available for TensorRT inference")
+                        return []
                     
                     # Preprocess
                     preprocessed = self._preprocess_tensorrt(frame)
